@@ -17,11 +17,11 @@ fn get_id() -> usize { COUNTER.fetch_add(1, Ordering::Relaxed) }
 
 // Nodes need to be cloneable so that each instance points to the same data in the graph.
 // But can we somehow wrap Node itself into Arc<RwLock<>> instead of wrapping all its properties?
-// The code is not pretty with all these Arc-RwLocks.
-type ValueType = Arc<RwLock<Option<JsValue>>>;
-type LinksType = Arc<RwLock<BTreeMap<String, usize>>>;
-type LinkedByType = Arc<RwLock<HashSet<(usize, String)>>>;
-type SubscriptionsType = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
+// The code is not pretty with all these Arc-RwLock read/write().unwraps().
+type Value = Arc<RwLock<Option<JsValue>>>;
+type Children = Arc<RwLock<BTreeMap<String, usize>>>;
+type Parents = Arc<RwLock<HashSet<(usize, String)>>>;
+type Subscriptions = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 
 // TODO use &str instead of String where possible
@@ -32,13 +32,15 @@ type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 pub struct Node {
     id: usize,
     key: String,
-    value: ValueType,
-    links: LinksType,
-    linked_by: LinkedByType,
-    on_subscriptions: SubscriptionsType,
-    map_subscriptions: SubscriptionsType,
+    value: Value,
+    children: Children,
+    parents: Parents,
+    on_subscriptions: Subscriptions,
+    map_subscriptions: Subscriptions,
     store: SharedNodeStore
 }
+
+// TODO: enum NodeContent { ChildNodes(ChildrenType), Value(ValueType)
 
 #[wasm_bindgen]
 impl Node {
@@ -47,31 +49,31 @@ impl Node {
         Self {
             id: 0,
             key: "".to_string(),
-            value: ValueType::default(),
-            links: LinksType::default(),
-            linked_by: LinkedByType::default(),
-            on_subscriptions: SubscriptionsType::default(),
-            map_subscriptions: SubscriptionsType::default(),
+            value: Value::default(),
+            children: Children::default(),
+            parents: Parents::default(),
+            on_subscriptions: Subscriptions::default(),
+            map_subscriptions: Subscriptions::default(),
             store: SharedNodeStore::default()
         }
     }
 
     fn new_child(parent: &mut Node, key: String) -> usize {
-        let mut linked_by = HashSet::new();
-        linked_by.insert((parent.id, key.clone()));
+        let mut parents = HashSet::new();
+        parents.insert((parent.id, key.clone()));
         let id = get_id();
         let node = Self {
             id,
             key: key.clone(),
-            value: ValueType::default(),
-            links: LinksType::default(),
-            linked_by: Arc::new(RwLock::new(linked_by)),
-            on_subscriptions: SubscriptionsType::default(),
-            map_subscriptions: SubscriptionsType::default(),
+            value: Value::default(),
+            children: Children::default(),
+            parents: Arc::new(RwLock::new(parents)),
+            on_subscriptions: Subscriptions::default(),
+            map_subscriptions: Subscriptions::default(),
             store: parent.store.clone()
         };
         parent.store.write().unwrap().insert(id, node);
-        parent.links.write().unwrap().insert(key, id);
+        parent.children.write().unwrap().insert(key, id);
         id
     }
 
@@ -85,10 +87,10 @@ impl Node {
         if value.is_some() {
             Self::_call(callback, &value.as_ref().unwrap(), key);
         } else {
-            let is_empty = self.links.read().unwrap().is_empty();
+            let is_empty = self.children.read().unwrap().is_empty();
             if !is_empty {
                 let obj = js_sys::Object::new();
-                for (key, child_id) in self.links.read().unwrap().iter() {
+                for (key, child_id) in self.children.read().unwrap().iter() {
                     let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
                         Some(child) => match &*(child.value.read().unwrap()) {
                             Some(value) => Some(value.clone()),
@@ -112,7 +114,7 @@ impl Node {
     }
 
     pub fn on(&mut self, callback: js_sys::Function) -> usize {
-        self._call_if_value_exists(&callback, &self.key.clone()); // TODO return the actual key
+        self._call_if_value_exists(&callback, &self.key.clone());
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
         subscription_id
@@ -123,7 +125,7 @@ impl Node {
             Node::new_child(self, key)
             // TODO: nullify self.value
         } else {
-            let existing_id = match self.links.read().unwrap().get(&key) {
+            let existing_id = match self.children.read().unwrap().get(&key) {
                 Some(node_id) => Some(*node_id),
                 _ => None
             };
@@ -142,7 +144,7 @@ impl Node {
     }
 
     pub fn map(&self, callback: js_sys::Function) -> usize {
-        for (key, child_id) in self.links.read().unwrap().iter() {
+        for (key, child_id) in self.children.read().unwrap().iter() {
             if let Some(child) = self.store.read().unwrap().get(&child_id) {
                 child.clone()._call_if_value_exists(&callback, key);
             }
@@ -154,13 +156,13 @@ impl Node {
 
     pub fn put(&mut self, value: &JsValue) {
         // TODO handle javascript Object values
-        // TODO: if "links" is replaced with "value", remove backreference from linked objects
+        // TODO: if "children" is replaced with "value", remove backreference from linked objects
         *(self.value.write().unwrap()) = Some(value.clone());
-        *(self.links.write().unwrap()) = BTreeMap::new();
+        *(self.children.write().unwrap()) = BTreeMap::new();
         for callback in self.on_subscriptions.read().unwrap().values() {
             Self::_call(callback, value, &self.key);
         }
-        for (parent_id, key) in self.linked_by.read().unwrap().iter() {
+        for (parent_id, key) in self.parents.read().unwrap().iter() {
             let parent = self.store.read().unwrap().get(parent_id).unwrap().clone();
             let mut parent2 = parent.clone();
             for callback in parent.clone().map_subscriptions.read().unwrap().values() {

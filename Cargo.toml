@@ -1,6 +1,6 @@
 [package]
 name = "rusty-gun"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Martti Malmi"]
 edition = "2018"
 
