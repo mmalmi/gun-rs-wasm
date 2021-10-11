@@ -17,7 +17,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(1);
 fn get_id() -> usize { COUNTER.fetch_add(1, Ordering::Relaxed) }
 
 // Nodes need to be clonable so that each instance points to the same data
-type ValueType = Arc<RwLock<Option<String>>>;
+type ValueType = Arc<RwLock<Option<JsValue>>>;
 type LinksType = Arc<RwLock<BTreeMap<String, usize>>>;
 type LinkedByType = Arc<RwLock<HashSet<usize>>>;
 type SubscriptionsType = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
@@ -68,8 +68,26 @@ impl Node {
     pub fn on(&mut self, callback: js_sys::Function) -> usize {
         let value = self.value.read().unwrap();
         if value.is_some() {
-            Self::_call(&callback, &JsValue::from_serde(&value.as_ref()).unwrap());
-        };
+            Self::_call(&callback, &value.as_ref().unwrap());
+        } else {
+            let is_empty = self.links.read().unwrap().is_empty();
+            if !is_empty {
+                let obj = js_sys::Object::new();
+                for (key, child_id) in self.links.read().unwrap().iter() {
+                    let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
+                        Some(child) => match &*(child.value.read().unwrap()) {
+                            Some(value) => Some(value.clone()),
+                            _ => None
+                        },
+                        _ => None
+                    };
+                    if let Some(value) = child_value {
+                        js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
+                    }
+                }
+                Self::_call(&callback, &obj);
+            }
+        }
 
         let subscription_id = get_id();
         self.subscriptions.write().unwrap().insert(subscription_id, callback);
@@ -79,6 +97,7 @@ impl Node {
     fn get_child_id(&mut self, path: String) -> usize {
         if self.value.read().unwrap().is_some() {
             Node::new_child(self, path)
+            // TODO: nullify self.value
         } else {
             let existing_id = match self.links.read().unwrap().get(&path) {
                 Some(node_id) => Some(*node_id),
@@ -93,7 +112,7 @@ impl Node {
 
     pub fn get(&mut self, path: String) -> Node {
         let id = self.get_child_id(path);
-        self.store.read().unwrap().get(&id).unwrap().clone() // wasm_bindgen doesn't deal with refs
+        self.store.read().unwrap().get(&id).unwrap().clone()
     }
 
     pub fn map(&self) {
@@ -101,8 +120,7 @@ impl Node {
     }
 
     pub fn put(&mut self, value: &JsValue) {
-        let str = value.into_serde().unwrap_or("asdf".to_string());
-        *(self.value.write().unwrap()) = Some(str);
+        *(self.value.write().unwrap()) = Some(value.clone());
         *(self.links.write().unwrap()) = BTreeMap::new();
         for callback in self.subscriptions.read().unwrap().values() {
             Self::_call(callback, value);
