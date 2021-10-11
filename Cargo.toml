@@ -1,7 +1,7 @@
 [package]
-name = "wasm-test"
+name = "rusty-gun"
 version = "0.1.0"
-authors = ["Martti Malmi <sirius@iki.fi>"]
+authors = ["Martti Malmi"]
 edition = "2018"
 
 [lib]

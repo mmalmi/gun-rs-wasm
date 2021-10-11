@@ -6,7 +6,6 @@ use std::sync::{
     RwLock
 };
 
-
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
 #[cfg(feature = "wee_alloc")]
@@ -16,7 +15,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 static COUNTER: AtomicUsize = AtomicUsize::new(1);
 fn get_id() -> usize { COUNTER.fetch_add(1, Ordering::Relaxed) }
 
-// Nodes need to be cloneable so that each instance points to the same data.
+// Nodes need to be cloneable so that each instance points to the same data in the graph.
 // But can we somehow wrap Node itself into Arc<RwLock<>> instead of wrapping all its properties?
 // The code is not pretty with all these Arc-RwLocks.
 type ValueType = Arc<RwLock<Option<JsValue>>>;
@@ -24,6 +23,9 @@ type LinksType = Arc<RwLock<BTreeMap<String, usize>>>;
 type LinkedByType = Arc<RwLock<HashSet<(usize, String)>>>;
 type SubscriptionsType = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
+
+// TODO use &str instead of String where possible
+// TODO proper automatic tests
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
