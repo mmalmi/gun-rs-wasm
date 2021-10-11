@@ -98,9 +98,12 @@ impl Node {
                     };
                     if let Some(value) = child_value {
                         js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
-                    } else {
-                        // TODO return reference to the child node: Node self.store.read().unwrap().get(&id).unwrap().clone()
-                        js_sys::Reflect::set(&obj, &JsValue::from(key), &JsValue::NULL);
+                    } else { // return child Node object
+                        js_sys::Reflect::set(
+                            &obj,
+                            &JsValue::from(key),
+                            &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
+                        );
                     }
                 }
                 Self::_call(callback, &obj, key);
