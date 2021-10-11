@@ -18,6 +18,7 @@ fn get_id() -> usize { COUNTER.fetch_add(1, Ordering::Relaxed) }
 
 // Nodes need to be cloneable so that each instance points to the same data.
 // But can we somehow wrap Node itself into Arc<RwLock<>> instead of wrapping all its properties?
+// The code is not pretty with all these Arc-RwLocks.
 type ValueType = Arc<RwLock<Option<JsValue>>>;
 type LinksType = Arc<RwLock<BTreeMap<String, usize>>>;
 type LinkedByType = Arc<RwLock<HashSet<(usize, String)>>>;
@@ -28,6 +29,7 @@ type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 #[derive(Debug, Clone)]
 pub struct Node {
     id: usize,
+    key: String,
     value: ValueType,
     links: LinksType,
     linked_by: LinkedByType,
@@ -42,6 +44,7 @@ impl Node {
     pub fn new() -> Self {
         Self {
             id: 0,
+            key: "".to_string(),
             value: ValueType::default(),
             links: LinksType::default(),
             linked_by: LinkedByType::default(),
@@ -57,6 +60,7 @@ impl Node {
         let id = get_id();
         let node = Self {
             id,
+            key: key.clone(),
             value: ValueType::default(),
             links: LinksType::default(),
             linked_by: Arc::new(RwLock::new(linked_by)),
@@ -93,7 +97,8 @@ impl Node {
                     if let Some(value) = child_value {
                         js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
                     } else {
-                        js_sys::Reflect::set(&obj, &JsValue::from(key), &JsValue::NULL); // TODO return Node self.store.read().unwrap().get(&id).unwrap().clone()
+                        // TODO return reference to the child node: Node self.store.read().unwrap().get(&id).unwrap().clone()
+                        js_sys::Reflect::set(&obj, &JsValue::from(key), &JsValue::NULL);
                     }
                 }
                 Self::_call(callback, &obj, key);
@@ -102,7 +107,7 @@ impl Node {
     }
 
     pub fn on(&mut self, callback: js_sys::Function) -> usize {
-        self._call_if_value_exists(&callback, &"".to_string());
+        self._call_if_value_exists(&callback, &self.key.clone()); // TODO return the actual key
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
         subscription_id
@@ -125,8 +130,10 @@ impl Node {
     }
 
     pub fn get(&mut self, key: String) -> Node {
-        let id = self.get_child_id(key);
-        self.store.read().unwrap().get(&id).unwrap().clone()
+        let id = self.get_child_id(key.clone());
+        let mut node = self.store.read().unwrap().get(&id).unwrap().clone();
+        node.key = key;
+        node
     }
 
     pub fn map(&self, callback: js_sys::Function) -> usize {
@@ -141,15 +148,21 @@ impl Node {
     }
 
     pub fn put(&mut self, value: &JsValue) {
+        // TODO handle javascript Object values
+        // TODO: if "links" is replaced with "value", remove backreference from linked objects
         *(self.value.write().unwrap()) = Some(value.clone());
         *(self.links.write().unwrap()) = BTreeMap::new();
         for callback in self.on_subscriptions.read().unwrap().values() {
-            Self::_call(callback, value, &"".to_string());
+            Self::_call(callback, value, &self.key);
         }
         for (parent_id, key) in self.linked_by.read().unwrap().iter() {
             let parent = self.store.read().unwrap().get(parent_id).unwrap().clone();
-            for callback in parent.map_subscriptions.read().unwrap().values() {
+            let mut parent2 = parent.clone();
+            for callback in parent.clone().map_subscriptions.read().unwrap().values() {
                 Self::_call(callback, value, key);
+            }
+            for callback in parent.on_subscriptions.read().unwrap().values() {
+                parent2._call_if_value_exists(&callback, key);
             }
         }
     }
@@ -161,6 +174,8 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
+    // TODO proper test
+    // TODO benchmark
     #[test]
     fn it_works() {
         let mut gun = crate::Node::new();
