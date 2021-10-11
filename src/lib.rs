@@ -83,6 +83,8 @@ impl Node {
                     };
                     if let Some(value) = child_value {
                         js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
+                    } else {
+                        js_sys::Reflect::set(&obj, &JsValue::from(key), child_id);
                     }
                 }
                 Self::_call(&callback, &obj);
