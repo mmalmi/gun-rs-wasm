@@ -30,7 +30,8 @@ pub struct Node {
     value: ValueType,
     links: LinksType,
     linked_by: LinkedByType,
-    subscriptions: SubscriptionsType,
+    on_subscriptions: SubscriptionsType,
+    map_subscriptions: SubscriptionsType,
     store: SharedNodeStore
 }
 
@@ -43,7 +44,8 @@ impl Node {
             value: ValueType::default(),
             links: LinksType::default(),
             linked_by: LinkedByType::default(),
-            subscriptions: SubscriptionsType::default(),
+            on_subscriptions: SubscriptionsType::default(),
+            map_subscriptions: SubscriptionsType::default(),
             store: SharedNodeStore::default()
         }
     }
@@ -57,7 +59,8 @@ impl Node {
             value: ValueType::default(),
             links: LinksType::default(),
             linked_by: Arc::new(RwLock::new(linked_by)),
-            subscriptions: SubscriptionsType::default(),
+            on_subscriptions: SubscriptionsType::default(),
+            map_subscriptions: SubscriptionsType::default(),
             store: parent.store.clone()
         };
         parent.store.write().unwrap().insert(id, node);
@@ -65,10 +68,15 @@ impl Node {
         id
     }
 
-    pub fn on(&mut self, callback: js_sys::Function) -> usize {
+    pub fn off(&mut self, subscription_id: usize) {
+        self.on_subscriptions.write().unwrap().remove(&subscription_id);
+        self.map_subscriptions.write().unwrap().remove(&subscription_id);
+    }
+
+    fn _call_if_value_exists(&mut self, callback: &js_sys::Function) {
         let value = self.value.read().unwrap();
         if value.is_some() {
-            Self::_call(&callback, &value.as_ref().unwrap());
+            Self::_call(callback, &value.as_ref().unwrap());
         } else {
             let is_empty = self.links.read().unwrap().is_empty();
             if !is_empty {
@@ -84,15 +92,18 @@ impl Node {
                     if let Some(value) = child_value {
                         js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
                     } else {
-                        js_sys::Reflect::set(&obj, &JsValue::from(key), child_id);
+                        js_sys::Reflect::set(&obj, &JsValue::from(key), &JsValue::NULL); // TODO return Node self.store.read().unwrap().get(&id).unwrap().clone()
                     }
                 }
-                Self::_call(&callback, &obj);
+                Self::_call(callback, &obj);
             }
         }
+    }
 
+    pub fn on(&mut self, callback: js_sys::Function) -> usize {
+        self._call_if_value_exists(&callback);
         let subscription_id = get_id();
-        self.subscriptions.write().unwrap().insert(subscription_id, callback);
+        self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
         subscription_id
     }
 
@@ -117,14 +128,21 @@ impl Node {
         self.store.read().unwrap().get(&id).unwrap().clone()
     }
 
-    pub fn map(&self) {
-
+    pub fn map(&self, callback: js_sys::Function) -> usize {
+        for (key, child_id) in self.links.read().unwrap().iter() {
+            if let Some(child) = self.store.read().unwrap().get(&child_id) {
+                child.clone()._call_if_value_exists(&callback);
+            }
+        }
+        let subscription_id = get_id();
+        self.map_subscriptions.write().unwrap().insert(subscription_id, callback);
+        subscription_id
     }
 
     pub fn put(&mut self, value: &JsValue) {
         *(self.value.write().unwrap()) = Some(value.clone());
         *(self.links.write().unwrap()) = BTreeMap::new();
-        for callback in self.subscriptions.read().unwrap().values() {
+        for callback in self.on_subscriptions.read().unwrap().values() {
             Self::_call(callback, value);
         }
     }
