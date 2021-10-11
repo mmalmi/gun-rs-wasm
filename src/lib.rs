@@ -16,10 +16,11 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 static COUNTER: AtomicUsize = AtomicUsize::new(1);
 fn get_id() -> usize { COUNTER.fetch_add(1, Ordering::Relaxed) }
 
-// Nodes need to be clonable so that each instance points to the same data
+// Nodes need to be cloneable so that each instance points to the same data.
+// But can we somehow wrap Node itself into Arc<RwLock<>> instead of wrapping all its properties?
 type ValueType = Arc<RwLock<Option<JsValue>>>;
 type LinksType = Arc<RwLock<BTreeMap<String, usize>>>;
-type LinkedByType = Arc<RwLock<HashSet<usize>>>;
+type LinkedByType = Arc<RwLock<HashSet<(usize, String)>>>;
 type SubscriptionsType = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 
@@ -50,9 +51,9 @@ impl Node {
         }
     }
 
-    fn new_child(parent: &mut Node, path: String) -> usize {
+    fn new_child(parent: &mut Node, key: String) -> usize {
         let mut linked_by = HashSet::new();
-        linked_by.insert(parent.id);
+        linked_by.insert((parent.id, key.clone()));
         let id = get_id();
         let node = Self {
             id,
@@ -64,7 +65,7 @@ impl Node {
             store: parent.store.clone()
         };
         parent.store.write().unwrap().insert(id, node);
-        parent.links.write().unwrap().insert(path, id);
+        parent.links.write().unwrap().insert(key, id);
         id
     }
 
@@ -73,10 +74,10 @@ impl Node {
         self.map_subscriptions.write().unwrap().remove(&subscription_id);
     }
 
-    fn _call_if_value_exists(&mut self, callback: &js_sys::Function) {
+    fn _call_if_value_exists(&mut self, callback: &js_sys::Function, key: &String) {
         let value = self.value.read().unwrap();
         if value.is_some() {
-            Self::_call(callback, &value.as_ref().unwrap());
+            Self::_call(callback, &value.as_ref().unwrap(), key);
         } else {
             let is_empty = self.links.read().unwrap().is_empty();
             if !is_empty {
@@ -95,43 +96,43 @@ impl Node {
                         js_sys::Reflect::set(&obj, &JsValue::from(key), &JsValue::NULL); // TODO return Node self.store.read().unwrap().get(&id).unwrap().clone()
                     }
                 }
-                Self::_call(callback, &obj);
+                Self::_call(callback, &obj, key);
             }
         }
     }
 
     pub fn on(&mut self, callback: js_sys::Function) -> usize {
-        self._call_if_value_exists(&callback);
+        self._call_if_value_exists(&callback, &"".to_string());
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
         subscription_id
     }
 
-    fn get_child_id(&mut self, path: String) -> usize {
+    fn get_child_id(&mut self, key: String) -> usize {
         if self.value.read().unwrap().is_some() {
-            Node::new_child(self, path)
+            Node::new_child(self, key)
             // TODO: nullify self.value
         } else {
-            let existing_id = match self.links.read().unwrap().get(&path) {
+            let existing_id = match self.links.read().unwrap().get(&key) {
                 Some(node_id) => Some(*node_id),
                 _ => None
             };
             match existing_id {
                 Some(id) => id,
-                _ => Node::new_child(&mut self.clone(), path)
+                _ => Node::new_child(&mut self.clone(), key)
             }
         }
     }
 
-    pub fn get(&mut self, path: String) -> Node {
-        let id = self.get_child_id(path);
+    pub fn get(&mut self, key: String) -> Node {
+        let id = self.get_child_id(key);
         self.store.read().unwrap().get(&id).unwrap().clone()
     }
 
     pub fn map(&self, callback: js_sys::Function) -> usize {
         for (key, child_id) in self.links.read().unwrap().iter() {
             if let Some(child) = self.store.read().unwrap().get(&child_id) {
-                child.clone()._call_if_value_exists(&callback);
+                child.clone()._call_if_value_exists(&callback, key);
             }
         }
         let subscription_id = get_id();
@@ -143,18 +144,18 @@ impl Node {
         *(self.value.write().unwrap()) = Some(value.clone());
         *(self.links.write().unwrap()) = BTreeMap::new();
         for callback in self.on_subscriptions.read().unwrap().values() {
-            Self::_call(callback, value);
+            Self::_call(callback, value, &"".to_string());
         }
-        for parent_id in self.linked_by.read().unwrap().iter() {
+        for (parent_id, key) in self.linked_by.read().unwrap().iter() {
             let parent = self.store.read().unwrap().get(parent_id).unwrap().clone();
             for callback in parent.map_subscriptions.read().unwrap().values() {
-                Self::_call(callback, value);
+                Self::_call(callback, value, key);
             }
         }
     }
 
-    fn _call(callback: &js_sys::Function, value: &JsValue) {
-        let _ = callback.call1(&JsValue::null(), value); // can the function go out of scope? remove sub on Err
+    fn _call(callback: &js_sys::Function, value: &JsValue, key: &String) {
+        let _ = callback.call2(&JsValue::null(), value, &JsValue::from(key)); // can the function go out of scope? remove sub on Err
     }
 }
 
