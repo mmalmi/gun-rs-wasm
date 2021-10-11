@@ -145,6 +145,12 @@ impl Node {
         for callback in self.on_subscriptions.read().unwrap().values() {
             Self::_call(callback, value);
         }
+        for parent_id in self.linked_by.read().unwrap().iter() {
+            let parent = self.store.read().unwrap().get(parent_id).unwrap().clone();
+            for callback in parent.map_subscriptions.read().unwrap().values() {
+                Self::_call(callback, value);
+            }
+        }
     }
 
     fn _call(callback: &js_sys::Function, value: &JsValue) {
