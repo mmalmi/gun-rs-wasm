@@ -26,6 +26,7 @@ type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 
 // TODO use &str instead of String where possible
 // TODO proper automatic tests
+// TODO abstract version for non-wasm usage
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
