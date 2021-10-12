@@ -4,11 +4,15 @@
 
   <strong>Rust & WASM port of <a href="https://github.com/amark/gun">Gun</a>.</strong>
   
-  `npm install rusty-gun`
-  
   <a href="https://rusty-gun-demo.netlify.app/">Example</a>
 
 </div>
+
+## Use
+
+`npm install rusty-gun`
+
+`import { Node as Gun } from "rusty-gun"`
 
 ## About
 
@@ -23,7 +27,7 @@ templates and usages of `wasm-pack`.
 [tutorials]: https://rustwasm.github.io/docs/wasm-pack/tutorials/index.html
 [template-docs]: https://rustwasm.github.io/docs/wasm-pack/tutorials/npm-browser-packages/index.html
 
-## 🚴 Usage
+## 🚴 Develop
 
 ### 🐑 Use `cargo generate` to Clone this Template
 

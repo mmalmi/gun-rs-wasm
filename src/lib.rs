@@ -159,8 +159,8 @@ impl Node {
     pub fn put(&mut self, value: &JsValue) {
         // TODO handle javascript Object values
         // TODO: if "children" is replaced with "value", remove backreference from linked objects
-        *(self.value.write().unwrap()) = Some(value.clone());
-        *(self.children.write().unwrap()) = BTreeMap::new();
+        *self.value.write().unwrap() = Some(value.clone());
+        *self.children.write().unwrap() = BTreeMap::new();
         for callback in self.on_subscriptions.read().unwrap().values() {
             Self::_call(callback, value, &self.key);
         }
@@ -173,6 +173,7 @@ impl Node {
             for callback in parent.on_subscriptions.read().unwrap().values() {
                 parent2._call_if_value_exists(&callback, key);
             }
+            *parent.value.write().unwrap() = None;
         }
     }
 
