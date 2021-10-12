@@ -40,8 +40,6 @@ pub struct Node {
     store: SharedNodeStore
 }
 
-// TODO: enum NodeContent { ChildNodes(ChildrenType), Value(ValueType)
-
 #[wasm_bindgen]
 impl Node {
     #[wasm_bindgen(constructor)]
@@ -58,9 +56,9 @@ impl Node {
         }
     }
 
-    fn new_child(parent: &mut Node, key: String) -> usize {
+    fn new_child(&self, key: String) -> usize {
         let mut parents = HashSet::new();
-        parents.insert((parent.id, key.clone()));
+        parents.insert((self.id, key.clone()));
         let id = get_id();
         let node = Self {
             id,
@@ -70,10 +68,10 @@ impl Node {
             parents: Arc::new(RwLock::new(parents)),
             on_subscriptions: Subscriptions::default(),
             map_subscriptions: Subscriptions::default(),
-            store: parent.store.clone()
+            store: self.store.clone()
         };
-        parent.store.write().unwrap().insert(id, node);
-        parent.children.write().unwrap().insert(key, id);
+        self.store.write().unwrap().insert(id, node);
+        self.children.write().unwrap().insert(key, id);
         id
     }
 
@@ -82,32 +80,37 @@ impl Node {
         self.map_subscriptions.write().unwrap().remove(&subscription_id);
     }
 
+    fn _children_to_js_value(&self, children: &BTreeMap<String, usize>) -> JsValue {
+        let obj = js_sys::Object::new();
+        for (key, child_id) in children.iter() {
+            let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
+                Some(child) => match &*(child.value.read().unwrap()) {
+                    Some(value) => Some(value.clone()),
+                    _ => None
+                },
+                _ => None
+            };
+            if let Some(value) = child_value {
+                let _ = js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
+            } else { // return child Node object
+                let _ = js_sys::Reflect::set(
+                    &obj,
+                    &JsValue::from(key),
+                    &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
+                );
+            }
+        }
+        obj.into()
+    }
+
     fn _call_if_value_exists(&mut self, callback: &js_sys::Function, key: &String) {
         let value = self.value.read().unwrap();
         if value.is_some() {
             Self::_call(callback, &value.as_ref().unwrap(), key);
         } else {
-            let is_empty = self.children.read().unwrap().is_empty();
-            if !is_empty {
-                let obj = js_sys::Object::new();
-                for (key, child_id) in self.children.read().unwrap().iter() {
-                    let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
-                        Some(child) => match &*(child.value.read().unwrap()) {
-                            Some(value) => Some(value.clone()),
-                            _ => None
-                        },
-                        _ => None
-                    };
-                    if let Some(value) = child_value {
-                        js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
-                    } else { // return child Node object
-                        js_sys::Reflect::set(
-                            &obj,
-                            &JsValue::from(key),
-                            &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
-                        );
-                    }
-                }
+            let children = self.children.read().unwrap();
+            if !children.is_empty() {
+                let obj = self._children_to_js_value(&children);
                 Self::_call(callback, &obj, key);
             }
         }
@@ -122,8 +125,7 @@ impl Node {
 
     fn get_child_id(&mut self, key: String) -> usize {
         if self.value.read().unwrap().is_some() {
-            Node::new_child(self, key)
-            // TODO: nullify self.value
+            self.new_child(key)
         } else {
             let existing_id = match self.children.read().unwrap().get(&key) {
                 Some(node_id) => Some(*node_id),
@@ -131,7 +133,7 @@ impl Node {
             };
             match existing_id {
                 Some(id) => id,
-                _ => Node::new_child(&mut self.clone(), key)
+                _ => self.new_child(key)
             }
         }
     }
