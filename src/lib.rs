@@ -26,7 +26,7 @@ type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 
 // TODO use &str instead of String where possible
 // TODO proper automatic tests
-// TODO abstract version for non-wasm usage
+// TODO generic version for non-wasm usage
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
@@ -139,10 +139,10 @@ impl Node {
         }
     }
 
-    pub fn get(&mut self, key: String) -> Node {
-        let id = self.get_child_id(key.clone());
+    pub fn get(&mut self, key: &str) -> Node {
+        let id = self.get_child_id(key.to_string());
         let mut node = self.store.read().unwrap().get(&id).unwrap().clone();
-        node.key = key;
+        node.key = key.to_string();
         node
     }
 
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn it_works() {
         let mut gun = crate::Node::new();
-        let node = gun.get("asdf".to_string());
+        let node = gun.get("asdf");
         assert_eq!(gun.id, 0);
         assert_eq!(node.id, 1);
     }
