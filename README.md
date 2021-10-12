@@ -1,20 +1,13 @@
 <div align="center">
 
-  <h1><code>wasm-pack-template</code></h1>
+  <h1><code>rusty-gun</code></h1>
 
-  <strong>A template for kick starting a Rust and WebAssembly project using <a href="https://github.com/rustwasm/wasm-pack">wasm-pack</a>.</strong>
+  <strong>Rust & WASM port of <a href="https://github.com/amark/gun">Gun</a>.</strong>
+  
+  `npm install rusty-gun`
+  
+  <a href="https://rusty-gun-demo.netlify.app/">Example</a>
 
-  <p>
-    <a href="https://travis-ci.org/rustwasm/wasm-pack-template"><img src="https://img.shields.io/travis/rustwasm/wasm-pack-template.svg?style=flat-square" alt="Build Status" /></a>
-  </p>
-
-  <h3>
-    <a href="https://rustwasm.github.io/docs/wasm-pack/tutorials/npm-browser-packages/index.html">Tutorial</a>
-    <span> | </span>
-    <a href="https://discordapp.com/channels/442252698964721669/443151097398296587">Chat</a>
-  </h3>
-
-  <sub>Built with 🦀🕸 by <a href="https://rustwasm.github.io/">The Rust and WebAssembly Working Group</a></sub>
 </div>
 
 ## About
