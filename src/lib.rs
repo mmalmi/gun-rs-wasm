@@ -50,7 +50,7 @@ type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct Node {
-    id: usize,
+    pub id: usize,
     key: String,
     path: Vec<String>,
     value: Value,
@@ -97,13 +97,14 @@ impl Node {
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
         // create callback
 
-        //let mut cloned_self = self.clone();
+        let mut cloned_self = self.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 console_log!("received: {}", txt);
-                if let Ok(json) = js_sys::JSON::parse(&String::from(txt.clone())) {
-                    console_log!("received json: {:?}", json);
-                    //cloned_self.get("latestMsg").put(&JsValue::from("hi"));
+                if let Ok(json) = js_sys::JSON::parse(&String::from(txt.clone())) { // is serde faster?
+                    //console_log!("received json: {:?}", json);
+                    console_log!("{}", cloned_self.id);
+                    //cloned_self.get("latestMsg").put(&JsValue::from(txt.clone())); // TODO why runtime error
                 }
             } else {
                 console_log!("message event, received Unknown: {:?}", e.data());
@@ -247,10 +248,9 @@ impl Node {
     }
 
     fn create_put_msg(&self, value: &JsValue) -> String {
-        let value: String = JSON::stringify(value).unwrap().into();
+        let value: String = JSON::stringify(value).unwrap().into(); // TODO non-strings shouldn't be stringified
         let msg_id = random_string(8);
         let time = js_sys::Date::now() as i64;
-        console_log!("{}", time);
 
         let full_path = &self.path.join("/");
         let key = &self.key.clone();
