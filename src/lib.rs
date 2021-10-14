@@ -7,8 +7,10 @@ use std::sync::{
 };
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket};
+use js_sys::{JSON, Reflect, Object as JsObject};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
+use serde_json::json;
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
@@ -37,6 +39,7 @@ type Children = Arc<RwLock<BTreeMap<String, usize>>>;
 type Parents = Arc<RwLock<HashSet<(usize, String)>>>;
 type Subscriptions = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
+type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
 
 // TODO use &str instead of String where possible
 // TODO proper automatic tests
@@ -49,12 +52,14 @@ type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 pub struct Node {
     id: usize,
     key: String,
+    path: Vec<String>,
     value: Value,
     children: Children,
     parents: Parents,
     on_subscriptions: Subscriptions,
     map_subscriptions: Subscriptions,
-    store: SharedNodeStore
+    store: SharedNodeStore,
+    websocket: SharedWebSocket
 }
 
 fn random_string(len: usize) -> String {
@@ -69,60 +74,36 @@ fn random_string(len: usize) -> String {
 impl Node {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        let _ = Self::start_websocket();
-        Self {
+        let node = Self {
             id: 0,
             key: "".to_string(),
+            path: Vec::new(),
             value: Value::default(),
             children: Children::default(),
             parents: Parents::default(),
             on_subscriptions: Subscriptions::default(),
             map_subscriptions: Subscriptions::default(),
-            store: SharedNodeStore::default()
-        }
+            store: SharedNodeStore::default(),
+            websocket: SharedWebSocket::default()
+        };
+        let _ = node.start_websocket();
+        node
     }
 
-    fn start_websocket() -> Result<(), JsValue> {
+    fn start_websocket(&self) -> Result<(), JsValue> {
         // Connect to an echo server
         let ws = WebSocket::new("ws://localhost:8765/gun")?;
         // For small binary messages, like CBOR, Arraybuffer is more efficient than Blob handling
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
         // create callback
-        let cloned_ws = ws.clone();
+
+        //let mut cloned_self = self.clone();
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
-            // Handle difference Text/Binary,...
-            if let Ok(abuf) = e.data().dyn_into::<js_sys::ArrayBuffer>() {
-                console_log!("message event, received arraybuffer: {:?}", abuf);
-                let array = js_sys::Uint8Array::new(&abuf);
-                let len = array.byte_length() as usize;
-                console_log!("Arraybuffer received {}bytes: {:?}", len, array.to_vec());
-                // here you can for example use Serde Deserialize decode the message
-                // for demo purposes we switch back to Blob-type and send off another binary message
-                cloned_ws.set_binary_type(web_sys::BinaryType::Blob);
-                match cloned_ws.send_with_u8_array(&vec![5, 6, 7, 8]) {
-                    Ok(_) => console_log!("binary message successfully sent"),
-                    Err(err) => console_log!("error sending message: {:?}", err),
-                }
-            } else if let Ok(blob) = e.data().dyn_into::<web_sys::Blob>() {
-                console_log!("message event, received blob: {:?}", blob);
-                // better alternative to juggling with FileReader is to use https://crates.io/crates/gloo-file
-                let fr = web_sys::FileReader::new().unwrap();
-                let fr_c = fr.clone();
-                // create onLoadEnd callback
-                let onloadend_cb = Closure::wrap(Box::new(move |_e: web_sys::ProgressEvent| {
-                    let array = js_sys::Uint8Array::new(&fr_c.result().unwrap());
-                    let len = array.byte_length() as usize;
-                    console_log!("Blob received {}bytes: {:?}", len, array.to_vec());
-                    // here you can for example use the received image/png data
-                })
-                    as Box<dyn FnMut(web_sys::ProgressEvent)>);
-                fr.set_onloadend(Some(onloadend_cb.as_ref().unchecked_ref()));
-                fr.read_as_array_buffer(&blob).expect("blob not readable");
-                onloadend_cb.forget();
-            } else if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
+            if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 console_log!("received: {}", txt);
-                if let Ok(json) = js_sys::JSON::parse(&String::from(txt)) {
+                if let Ok(json) = js_sys::JSON::parse(&String::from(txt.clone())) {
                     console_log!("received json: {:?}", json);
+                    //cloned_self.get("latestMsg").put(&JsValue::from("hi"));
                 }
             } else {
                 console_log!("message event, received Unknown: {:?}", e.data());
@@ -134,12 +115,14 @@ impl Node {
         onmessage_callback.forget();
 
         let onerror_callback = Closure::wrap(Box::new(move |e: ErrorEvent| {
-            console_log!("error event: {:?}", e);
+            console_log!("websocket error: {:?}", e);
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
 
         let cloned_ws = ws.clone();
+
+        let cloned_ws_pointer = self.websocket.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             console_log!("socket opened");
             let msg_id = random_string(8);
@@ -147,42 +130,35 @@ impl Node {
             let m = format!("{{\"#\":\"{}\",\"dam\":\"hi\",\"pid\":\"{}\"}}", msg_id, peer_id);
             match cloned_ws.send_with_str(&m) {
                 Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
+                Err(err) => console_log!("error sending hi-message: {:?}", err),
             }
-            let msg_id = random_string(8);
-            let val = random_string(36);
-            let time = js_sys::Date::now();
-            let m = format!("{{\"#\":\"{}\",\"put\":{{\"asdf\":{{\"_\":{{\"#\":\"asdf\",\">\":{{\"fasd\":{}}}}},\"fasd\":\"{}\"}}}}}}", msg_id, time, val);
-            match cloned_ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
-            }
-            let msg_id = random_string(8);
-            let m = format!("{{\"#\":\"{}\",\"get\":{{\"#\":\"asdf/fasd\",\".\":\"fasd\"}}}}", msg_id);
-            match cloned_ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
-            }
+            cloned_ws_pointer.write().unwrap().insert(cloned_ws.clone());
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();
-
         Ok(())
     }
 
     fn new_child(&self, key: String) -> usize {
+        assert!(key.len() > 0, "Key length must be greater than zero");
         let mut parents = HashSet::new();
         parents.insert((self.id, key.clone()));
+        let mut path = self.path.clone();
+        if self.key.len() > 0 {
+            path.push(self.key.clone());
+        }
         let id = get_id();
         let node = Self {
             id,
             key: key.clone(),
+            path,
             value: Value::default(),
             children: Children::default(),
             parents: Arc::new(RwLock::new(parents)),
             on_subscriptions: Subscriptions::default(),
             map_subscriptions: Subscriptions::default(),
-            store: self.store.clone()
+            store: self.store.clone(),
+            websocket: self.websocket.clone()
         };
         self.store.write().unwrap().insert(id, node);
         self.children.write().unwrap().insert(key, id);
@@ -195,7 +171,7 @@ impl Node {
     }
 
     fn _children_to_js_value(&self, children: &BTreeMap<String, usize>) -> JsValue {
-        let obj = js_sys::Object::new();
+        let obj = JsObject::new();
         for (key, child_id) in children.iter() {
             let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
                 Some(child) => match &*(child.value.read().unwrap()) {
@@ -205,9 +181,9 @@ impl Node {
                 _ => None
             };
             if let Some(value) = child_value {
-                let _ = js_sys::Reflect::set(&obj, &JsValue::from(key), &value);
+                let _ = Reflect::set(&obj, &JsValue::from(key), &value);
             } else { // return child Node object
-                let _ = js_sys::Reflect::set(
+                let _ = Reflect::set(
                     &obj,
                     &JsValue::from(key),
                     &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
@@ -270,6 +246,49 @@ impl Node {
         subscription_id
     }
 
+    fn create_put_msg(&self, value: &JsValue) -> String {
+        let value: String = JSON::stringify(value).unwrap().into();
+        let msg_id = random_string(8);
+        let time = js_sys::Date::now() as i64;
+        console_log!("{}", time);
+
+        let full_path = &self.path.join("/");
+        let key = &self.key.clone();
+        let mut json = json!({
+            "put": {
+                full_path: {
+                    "_": {
+                        "#": full_path,
+                        ">": {
+                            key: time
+                        }
+                    },
+                    key: &value
+                }
+            },
+            "#": msg_id,
+        });
+
+        let puts = &mut json["put"];
+        // if it's a nested node, put its parents also
+        for (i, node_name) in self.path.iter().enumerate().nth(1) {
+            let path = self.path[..i].join("/");
+            let path_obj = json!({
+                "_": {
+                    "#": path,
+                    ">": {
+                        node_name: time
+                    }
+                },
+                node_name: {
+                    "#": self.path[..(i+1)].join("/")
+                }
+            });
+            puts[path] = path_obj;
+        }
+        json.to_string()
+    }
+
     pub fn put(&mut self, value: &JsValue) {
         // TODO handle javascript Object values
         // TODO: if "children" is replaced with "value", remove backreference from linked objects
@@ -288,6 +307,15 @@ impl Node {
                 parent2._call_if_value_exists(&callback, key);
             }
             *parent.value.write().unwrap() = None;
+        }
+        if let Some(ws) = &*self.websocket.read().unwrap() {
+            let m = self.create_put_msg(&value);
+            match ws.send_with_str(&m) {
+                Ok(_) => console_log!("sent: {}", m),
+                Err(err) => console_log!("error sending message: {:?}", err),
+            }
+        } else {
+            console_log!("no websocket to send to");
         }
     }
 
