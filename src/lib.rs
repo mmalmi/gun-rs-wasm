@@ -10,7 +10,8 @@ use web_sys::{ErrorEvent, MessageEvent, WebSocket};
 use js_sys::{JSON, Reflect, Object as JsObject};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
-use serde_json::json;
+use serde_json::{json, Value as SerdeJsonValue};
+
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
@@ -46,11 +47,13 @@ type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
 // TODO generic version for non-wasm usage
 // TODO break into submodules
 // TODO websocket
+// TODO persist data by saving root node to indexedDB as serialized by serde?
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct Node {
-    pub id: usize,
+    id: usize,
+    updated_at: Arc<RwLock<i64>>,
     key: String,
     path: Vec<String>,
     value: Value,
@@ -76,6 +79,7 @@ impl Node {
     pub fn new() -> Self {
         let node = Self {
             id: 0,
+            updated_at: Arc::new(RwLock::new(0)),
             key: "".to_string(),
             path: Vec::new(),
             value: Value::default(),
@@ -86,6 +90,7 @@ impl Node {
             store: SharedNodeStore::default(),
             websocket: SharedWebSocket::default()
         };
+        console_error_panic_hook::set_once();
         let _ = node.start_websocket();
         node
     }
@@ -101,10 +106,8 @@ impl Node {
         let onmessage_callback = Closure::wrap(Box::new(move |e: MessageEvent| {
             if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 console_log!("received: {}", txt);
-                if let Ok(json) = js_sys::JSON::parse(&String::from(txt.clone())) { // is serde faster?
-                    //console_log!("received json: {:?}", json);
-                    console_log!("{}", cloned_self.id);
-                    //cloned_self.get("latestMsg").put(&JsValue::from(txt.clone())); // TODO why runtime error
+                if let Ok(json) = serde_json::from_str::<SerdeJsonValue>(&String::from(txt.clone())) {
+                    cloned_self.incoming_message(&json, false);
                 }
             } else {
                 console_log!("message event, received Unknown: {:?}", e.data());
@@ -151,6 +154,7 @@ impl Node {
         let id = get_id();
         let node = Self {
             id,
+            updated_at: Arc::new(RwLock::new(0)),
             key: key.clone(),
             path,
             value: Value::default(),
@@ -211,6 +215,15 @@ impl Node {
         self._call_if_value_exists(&callback, &self.key.clone());
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
+
+        if let Some(ws) = &*self.websocket.read().unwrap() {
+            let m = self.create_get_msg();
+            match ws.send_with_str(&m) {
+                Ok(_) => console_log!("sent: {}", m),
+                Err(err) => console_log!("error sending message: {:?}", err),
+            }
+        }
+
         subscription_id
     }
 
@@ -247,11 +260,31 @@ impl Node {
         subscription_id
     }
 
-    fn create_put_msg(&self, value: &JsValue) -> String {
+    fn create_get_msg(&self) -> String {
+        let msg_id = random_string(8);
+        let key = self.key.clone();
+        if self.path.len() > 0 {
+            let path = self.path.join("/");
+            json!({
+                "get": {
+                    "#": path,
+                    ".": key
+                },
+                "#": msg_id
+            }).to_string()
+        } else {
+            json!({
+                "get": {
+                    "#": key
+                },
+                "#": msg_id
+            }).to_string()
+        }
+    }
+
+    fn create_put_msg(&self, value: &JsValue, updated_at: i64) -> String {
         let value: String = JSON::stringify(value).unwrap().into(); // TODO non-strings shouldn't be stringified
         let msg_id = random_string(8);
-        let time = js_sys::Date::now() as i64;
-
         let full_path = &self.path.join("/");
         let key = &self.key.clone();
         let mut json = json!({
@@ -260,7 +293,7 @@ impl Node {
                     "_": {
                         "#": full_path,
                         ">": {
-                            key: time
+                            key: updated_at
                         }
                     },
                     key: &value
@@ -277,7 +310,7 @@ impl Node {
                 "_": {
                     "#": path,
                     ">": {
-                        node_name: time
+                        node_name: updated_at
                     }
                 },
                 node_name: {
@@ -289,33 +322,89 @@ impl Node {
         json.to_string()
     }
 
+    fn incoming_message(&mut self, msg: &SerdeJsonValue, is_from_array: bool) {
+        if let Some(array) = msg.as_array() {
+            if is_from_array { return; } // don't allow array inside array
+            for msg in array.iter() {
+                self.incoming_message(msg, true);
+            }
+            return;
+        }
+        if let Some(obj) = msg.as_object() {
+            if let Some(put) = obj.get("put") {
+                if let Some(obj) = put.as_object() {
+                    self.incoming_put(obj);
+                }
+            }
+            if let Some(get) = obj.get("get") {
+                if let Some(obj) = get.as_object() {
+                    self.incoming_get(obj);
+                }
+            }
+        }
+    }
+
+    fn incoming_put(&mut self, put: &serde_json::Map<String, SerdeJsonValue>) {
+        for (key, value) in put.iter() {
+            let mut node = self.get(key);
+            for node_name in key.split("/").nth(1) {
+                node = node.get(node_name);
+            }
+            if let Some(meta) = value["_"][">"].as_object() {
+                for (child_key, incoming_val_updated_at) in meta.iter() {
+                    let incoming_val_updated_at = incoming_val_updated_at.as_i64().unwrap();
+                    let mut child = node.get(child_key);
+                    if *child.updated_at.read().unwrap() < incoming_val_updated_at {
+                        //console_log!("{}/{} is new, updating {:?}", key, child_key, incoming_val_updated_at);
+                        if let Some(new_value) = value.get(child_key) {
+                            let new_value = JsValue::from_serde(new_value).unwrap();
+                            child.put_local(&new_value, incoming_val_updated_at);
+                        }
+                    } else {
+                        //console_log!("{}/{} not new {:?}", key, child_key, incoming_val_updated_at);
+                    }
+                }
+            }
+        }
+    }
+
+    fn incoming_get(&self, get: &serde_json::Map<String, SerdeJsonValue>) {
+        console_log!("incoming get {:?}", get);
+    }
+
     pub fn put(&mut self, value: &JsValue) {
+        let time = js_sys::Date::now() as i64;
+        self.put_local(value, time);
+        if let Some(ws) = &*self.websocket.read().unwrap() {
+            let m = self.create_put_msg(&value, time);
+            match ws.send_with_str(&m) {
+                Ok(_) => console_log!("sent: {}", m),
+                Err(err) => console_log!("error sending message: {:?}", err),
+            }
+        }
+    }
+
+    fn put_local(&mut self, value: &JsValue, time: i64) {
+        // root.get(soul).get(key).put(jsvalue)
         // TODO handle javascript Object values
         // TODO: if "children" is replaced with "value", remove backreference from linked objects
+        *self.updated_at.write().unwrap() = time;
         *self.value.write().unwrap() = Some(value.clone());
         *self.children.write().unwrap() = BTreeMap::new();
         for callback in self.on_subscriptions.read().unwrap().values() {
             Self::_call(callback, value, &self.key);
         }
         for (parent_id, key) in self.parents.read().unwrap().iter() {
-            let parent = self.store.read().unwrap().get(parent_id).unwrap().clone();
-            let mut parent2 = parent.clone();
-            for callback in parent.clone().map_subscriptions.read().unwrap().values() {
-                Self::_call(callback, value, key);
+            if let Some(parent) = self.store.read().unwrap().get(parent_id) {
+                let mut parent_clone = parent.clone();
+                for callback in parent.clone().map_subscriptions.read().unwrap().values() {
+                    Self::_call(callback, value, key);
+                }
+                for callback in parent.on_subscriptions.read().unwrap().values() {
+                    parent_clone._call_if_value_exists(&callback, key);
+                }
+                *parent.value.write().unwrap() = None;
             }
-            for callback in parent.on_subscriptions.read().unwrap().values() {
-                parent2._call_if_value_exists(&callback, key);
-            }
-            *parent.value.write().unwrap() = None;
-        }
-        if let Some(ws) = &*self.websocket.read().unwrap() {
-            let m = self.create_put_msg(&value);
-            match ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
-            }
-        } else {
-            console_log!("no websocket to send to");
         }
     }
 
