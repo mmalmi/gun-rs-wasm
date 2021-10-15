@@ -53,7 +53,7 @@ type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
 #[derive(Debug, Clone)]
 pub struct Node {
     id: usize,
-    updated_at: Arc<RwLock<i64>>,
+    updated_at: Arc<RwLock<i64>>, // TODO option?
     key: String,
     path: Vec<String>,
     value: Value,
@@ -175,42 +175,6 @@ impl Node {
         self.map_subscriptions.write().unwrap().remove(&subscription_id);
     }
 
-    fn _children_to_js_value(&self, children: &BTreeMap<String, usize>) -> JsValue {
-        let obj = JsObject::new();
-        for (key, child_id) in children.iter() {
-            let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
-                Some(child) => match &*(child.value.read().unwrap()) {
-                    Some(value) => Some(value.clone()),
-                    _ => None
-                },
-                _ => None
-            };
-            if let Some(value) = child_value {
-                let _ = Reflect::set(&obj, &JsValue::from(key), &value);
-            } else { // return child Node object
-                let _ = Reflect::set(
-                    &obj,
-                    &JsValue::from(key),
-                    &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
-                );
-            }
-        }
-        obj.into()
-    }
-
-    fn _call_if_value_exists(&mut self, callback: &js_sys::Function, key: &String) {
-        let value = self.value.read().unwrap();
-        if value.is_some() {
-            Self::_call(callback, &value.as_ref().unwrap(), key);
-        } else {
-            let children = self.children.read().unwrap();
-            if !children.is_empty() {
-                let obj = self._children_to_js_value(&children);
-                Self::_call(callback, &obj, key);
-            }
-        }
-    }
-
     pub fn on(&mut self, callback: js_sys::Function) -> usize {
         self._call_if_value_exists(&callback, &self.key.clone());
         let subscription_id = get_id();
@@ -225,21 +189,6 @@ impl Node {
         }
 
         subscription_id
-    }
-
-    fn get_child_id(&mut self, key: String) -> usize {
-        if self.value.read().unwrap().is_some() {
-            self.new_child(key)
-        } else {
-            let existing_id = match self.children.read().unwrap().get(&key) {
-                Some(node_id) => Some(*node_id),
-                _ => None
-            };
-            match existing_id {
-                Some(id) => id,
-                _ => self.new_child(key)
-            }
-        }
     }
 
     pub fn get(&mut self, key: &str) -> Node {
@@ -258,6 +207,21 @@ impl Node {
         let subscription_id = get_id();
         self.map_subscriptions.write().unwrap().insert(subscription_id, callback);
         subscription_id
+    }
+
+    fn get_child_id(&mut self, key: String) -> usize {
+        if self.value.read().unwrap().is_some() {
+            self.new_child(key)
+        } else {
+            let existing_id = match self.children.read().unwrap().get(&key) {
+                Some(node_id) => Some(*node_id),
+                _ => None
+            };
+            match existing_id {
+                Some(id) => id,
+                _ => self.new_child(key)
+            }
+        }
     }
 
     fn create_get_msg(&self) -> String {
@@ -345,31 +309,122 @@ impl Node {
     }
 
     fn incoming_put(&mut self, put: &serde_json::Map<String, SerdeJsonValue>) {
-        for (key, value) in put.iter() {
-            let mut node = self.get(key);
-            for node_name in key.split("/").nth(1) {
+        for (updated_key, update_data) in put.iter() {
+            let mut node = self.get(updated_key);
+            for node_name in updated_key.split("/").nth(1) {
                 node = node.get(node_name);
             }
-            if let Some(meta) = value["_"][">"].as_object() {
-                for (child_key, incoming_val_updated_at) in meta.iter() {
+            if let Some(updated_at_times) = update_data["_"][">"].as_object() {
+                for (child_key, incoming_val_updated_at) in updated_at_times.iter() {
                     let incoming_val_updated_at = incoming_val_updated_at.as_i64().unwrap();
                     let mut child = node.get(child_key);
                     if *child.updated_at.read().unwrap() < incoming_val_updated_at {
-                        //console_log!("{}/{} is new, updating {:?}", key, child_key, incoming_val_updated_at);
-                        if let Some(new_value) = value.get(child_key) {
+                        // TODO if incoming_val_updated_at > current_time { defer_operation() }
+                        if let Some(new_value) = update_data.get(child_key) {
                             let new_value = JsValue::from_serde(new_value).unwrap();
                             child.put_local(&new_value, incoming_val_updated_at);
                         }
-                    } else {
-                        //console_log!("{}/{} not new {:?}", key, child_key, incoming_val_updated_at);
-                    }
+                    } // TODO else append to history
                 }
             }
         }
     }
 
-    fn incoming_get(&self, get: &serde_json::Map<String, SerdeJsonValue>) {
+    fn _children_to_js_value(&self, children: &BTreeMap<String, usize>) -> JsValue {
+        let obj = JsObject::new();
+        for (key, child_id) in children.iter() {
+            let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
+                Some(child) => match &*(child.value.read().unwrap()) {
+                    Some(value) => Some(value.clone()),
+                    _ => None
+                },
+                _ => None
+            };
+            if let Some(value) = child_value {
+                let _ = Reflect::set(&obj, &JsValue::from(key), &value);
+            } else { // return child Node object
+                let _ = Reflect::set(
+                    &obj,
+                    &JsValue::from(key),
+                    &self.store.read().unwrap().get(&child_id).unwrap().clone().into()
+                );
+            }
+        }
+        obj.into()
+    }
+
+    fn _call_if_value_exists(&mut self, callback: &js_sys::Function, key: &String) {
+        if let Some(value) = self.get_js_value() {
+            Self::_call(callback, &value.as_ref(), key);
+        }
+    }
+
+    fn ws_send(&self, msg: &String) {
+        if let Some(ws) = &*self.websocket.read().unwrap() {
+            match ws.send_with_str(&msg) {
+                Ok(_) => console_log!("sent: {}", msg),
+                Err(err) => console_log!("error sending message: {:?}", err),
+            }
+        }
+    }
+
+    fn get_js_value(&self) -> Option<JsValue> {
+        let value = self.value.read().unwrap();
+        if value.is_some() {
+            value.clone()
+        } else {
+            let children = self.children.read().unwrap();
+            if !children.is_empty() {
+                let obj = self._children_to_js_value(&children);
+                return Some(obj)
+            }
+            None
+        }
+    }
+
+    fn send_get_response_if_have(&self) {
+        if let Some(value) = self.get_js_value() {
+            let msg_id = random_string(8);
+            let full_path = &self.path.join("/");
+            let key = &self.key.clone();
+            let value: String = JSON::stringify(&value).unwrap().into(); // TODO non-strings shouldn't be stringified
+            let json = json!({
+                "put": {
+                    full_path: {
+                        "_": {
+                            "#": full_path,
+                            ">": {
+                                key: &*self.updated_at.read().unwrap()
+                            }
+                        },
+                        key: &value
+                    }
+                },
+                "#": msg_id,
+            }).to_string();
+            self.ws_send(&json);
+        }
+    }
+
+    fn incoming_get(&mut self, get: &serde_json::Map<String, SerdeJsonValue>) {
         console_log!("incoming get {:?}", get);
+        if let Some(path) = get.get("#") {
+            if let Some(path) = path.as_str() {
+                if let Some(key) = get.get(".") {
+                    if let Some(key) = key.as_str() {
+                        let mut split = path.split("/");
+                        let mut node = self.get(split.nth(0).unwrap());
+                        for node_name in split.nth(0) {
+                            node = node.get(node_name); // TODO get only existing nodes in order to not spam our graph with empties
+                        }
+                        node = node.get(key);
+                        node.send_get_response_if_have();
+                    }
+                } else {
+                    self.get(path).send_get_response_if_have();
+                }
+            }
+        }
     }
 
     pub fn put(&mut self, value: &JsValue) {
