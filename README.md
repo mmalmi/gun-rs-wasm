@@ -4,7 +4,7 @@
 
   <strong>Rust & WASM port of <a href="https://github.com/amark/gun">Gun</a>.</strong>
   
-  <a href="https://rusty-gun-demo.netlify.app/">Example</a>
+  <a href="https://rusty-gun-demo.netlify.app/">Example</a> (<a href="https://github.com/mmalmi/rusty-gun-demo/">source</a>)
 
 </div>
 
