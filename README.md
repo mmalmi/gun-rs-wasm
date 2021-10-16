@@ -12,7 +12,12 @@
 
 `npm install rusty-gun`
 
-`import { Node as Gun } from "rusty-gun"`
+```
+import { Node as Gun } from "rusty-gun"
+const gun = new Gun('ws://localhost:8765/gun')
+gun.get("profile").get("name").on((v,k) => console.log(k,v))
+gun.get("profile").get("name").put("Satoshi")
+```
 
 ## About
 
