@@ -53,7 +53,7 @@ type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
 #[derive(Debug, Clone)]
 pub struct Node {
     id: usize,
-    updated_at: Arc<RwLock<i64>>, // TODO option?
+    updated_at: Arc<RwLock<f64>>, // TODO option?
     key: String,
     path: Vec<String>,
     value: Value,
@@ -79,7 +79,7 @@ impl Node {
     pub fn new(options: &JsValue) -> Self {
         let node = Self {
             id: 0,
-            updated_at: Arc::new(RwLock::new(0)),
+            updated_at: Arc::new(RwLock::new(0.0)),
             key: "".to_string(),
             path: Vec::new(),
             value: Value::default(),
@@ -176,7 +176,7 @@ impl Node {
         let id = get_id();
         let node = Self {
             id,
-            updated_at: Arc::new(RwLock::new(0)),
+            updated_at: Arc::new(RwLock::new(0.0)),
             key: key.clone(),
             path,
             value: Value::default(),
@@ -268,7 +268,7 @@ impl Node {
         }
     }
 
-    fn create_put_msg(&self, value: &JsValue, updated_at: i64) -> String {
+    fn create_put_msg(&self, value: &JsValue, updated_at: f64) -> String {
         let value: String = JSON::stringify(value).unwrap().into(); // TODO non-strings shouldn't be stringified
         let msg_id = random_string(8);
         let full_path = &self.path.join("/");
@@ -338,7 +338,7 @@ impl Node {
             }
             if let Some(updated_at_times) = update_data["_"][">"].as_object() {
                 for (child_key, incoming_val_updated_at) in updated_at_times.iter() {
-                    let incoming_val_updated_at = incoming_val_updated_at.as_i64().unwrap();
+                    let incoming_val_updated_at = incoming_val_updated_at.as_f64().unwrap();
                     let mut child = node.get(child_key);
                     if *child.updated_at.read().unwrap() < incoming_val_updated_at {
                         // TODO if incoming_val_updated_at > current_time { defer_operation() }
@@ -450,7 +450,7 @@ impl Node {
     }
 
     pub fn put(&mut self, value: &JsValue) {
-        let time = js_sys::Date::now() as i64;
+        let time = js_sys::Date::now();
         self.put_local(value, time);
         if let Some(ws) = &*self.websocket.read().unwrap() {
             let m = self.create_put_msg(&value, time);
@@ -461,7 +461,7 @@ impl Node {
         }
     }
 
-    fn put_local(&mut self, value: &JsValue, time: i64) {
+    fn put_local(&mut self, value: &JsValue, time: f64) {
         // root.get(soul).get(key).put(jsvalue)
         // TODO handle javascript Object values
         // TODO: if "children" is replaced with "value", remove backreference from linked objects
