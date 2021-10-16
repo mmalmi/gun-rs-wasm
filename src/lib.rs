@@ -7,7 +7,7 @@ use std::sync::{
 };
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket};
-use js_sys::{JSON, Reflect, Object as JsObject};
+use js_sys::{JSON, Reflect, Object as JsObject, Array as JsArray};
 use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use serde_json::{json, Value as SerdeJsonValue};
@@ -76,7 +76,7 @@ fn random_string(len: usize) -> String {
 #[wasm_bindgen]
 impl Node {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
+    pub fn new(options: &JsValue) -> Self {
         let node = Self {
             id: 0,
             updated_at: Arc::new(RwLock::new(0)),
@@ -91,13 +91,35 @@ impl Node {
             websocket: SharedWebSocket::default()
         };
         console_error_panic_hook::set_once();
-        let _ = node.start_websocket();
+        node.handle_options(options);
         node
     }
 
-    fn start_websocket(&self) -> Result<(), JsValue> {
+    fn handle_options(&self, options: &JsValue) {
+        let mut peers = Vec::new();
+        if let Some(peer) = options.as_string() {
+            peers.push(peer);
+        }
+        if let Some(object) = JsObject::try_from(options) { // horrible. can JsValue processing be improved?
+            if let Ok(val) = Reflect::get(object, &JsValue::from("peers")) {
+                if JsArray::is_array(&val) {
+                    for peer in JsArray::from(&val).iter() {
+                        if let Some(peer) = peer.as_string() {
+                            peers.push(peer.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        for peer in peers {
+            let _ = self.start_websocket(peer);
+        }
+    }
+
+    fn start_websocket(&self, url: String) -> Result<(), JsValue> {
         // Connect to an echo server
-        let ws = WebSocket::new("ws://localhost:8765/gun")?;
+        let ws = WebSocket::new(&url)?;
         // For small binary messages, like CBOR, Arraybuffer is more efficient than Blob handling
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
         // create callback
@@ -199,7 +221,7 @@ impl Node {
     }
 
     pub fn map(&self, callback: js_sys::Function) -> usize {
-        for (key, child_id) in self.children.read().unwrap().iter() {
+        for (key, child_id) in self.children.read().unwrap().iter() { // TODO can be faster with rayon multithreading?
             if let Some(child) = self.store.read().unwrap().get(&child_id) {
                 child.clone()._call_if_value_exists(&callback, key);
             }
@@ -332,7 +354,7 @@ impl Node {
 
     fn _children_to_js_value(&self, children: &BTreeMap<String, usize>) -> JsValue {
         let obj = JsObject::new();
-        for (key, child_id) in children.iter() {
+        for (key, child_id) in children.iter() { // TODO faster with rayon?
             let child_value: Option<JsValue> = match self.store.read().unwrap().get(&child_id) {
                 Some(child) => match &*(child.value.read().unwrap()) {
                     Some(value) => Some(value.clone()),
@@ -446,10 +468,10 @@ impl Node {
         *self.updated_at.write().unwrap() = time;
         *self.value.write().unwrap() = Some(value.clone());
         *self.children.write().unwrap() = BTreeMap::new();
-        for callback in self.on_subscriptions.read().unwrap().values() {
+        for callback in self.on_subscriptions.read().unwrap().values() { // rayon?
             Self::_call(callback, value, &self.key);
         }
-        for (parent_id, key) in self.parents.read().unwrap().iter() {
+        for (parent_id, key) in self.parents.read().unwrap().iter() { // rayon?
             if let Some(parent) = self.store.read().unwrap().get(parent_id) {
                 let mut parent_clone = parent.clone();
                 for callback in parent.clone().map_subscriptions.read().unwrap().values() {
