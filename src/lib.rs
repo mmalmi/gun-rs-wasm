@@ -40,7 +40,7 @@ type Children = Arc<RwLock<BTreeMap<String, usize>>>;
 type Parents = Arc<RwLock<HashSet<(usize, String)>>>;
 type Subscriptions = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
-type SharedWebSocket = Arc<RwLock<Option<WebSocket>>>;
+type SharedWebSockets = Arc<RwLock<HashMap<String, WebSocket>>>;
 
 // TODO use &str instead of String where possible
 // TODO proper automatic tests
@@ -62,7 +62,7 @@ pub struct Node {
     on_subscriptions: Subscriptions,
     map_subscriptions: Subscriptions,
     store: SharedNodeStore,
-    websocket: SharedWebSocket
+    websockets: SharedWebSockets
 }
 
 fn random_string(len: usize) -> String {
@@ -88,7 +88,7 @@ impl Node {
             on_subscriptions: Subscriptions::default(),
             map_subscriptions: Subscriptions::default(),
             store: SharedNodeStore::default(),
-            websocket: SharedWebSocket::default()
+            websockets: SharedWebSockets::default()
         };
         console_error_panic_hook::set_once();
         node.handle_options(options);
@@ -148,7 +148,7 @@ impl Node {
 
         let cloned_ws = ws.clone();
 
-        let cloned_ws_pointer = self.websocket.clone();
+        let cloned_ws_pointer = self.websockets.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             console_log!("socket opened");
             let msg_id = random_string(8);
@@ -158,7 +158,7 @@ impl Node {
                 Ok(_) => console_log!("sent: {}", m),
                 Err(err) => console_log!("error sending hi-message: {:?}", err),
             }
-            cloned_ws_pointer.write().unwrap().insert(cloned_ws.clone());
+            cloned_ws_pointer.write().unwrap().insert(url.clone(), cloned_ws.clone());
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();
@@ -185,7 +185,7 @@ impl Node {
             on_subscriptions: Subscriptions::default(),
             map_subscriptions: Subscriptions::default(),
             store: self.store.clone(),
-            websocket: self.websocket.clone()
+            websockets: self.websockets.clone()
         };
         self.store.write().unwrap().insert(id, node);
         self.children.write().unwrap().insert(key, id);
@@ -201,14 +201,8 @@ impl Node {
         self._call_if_value_exists(&callback, &self.key.clone());
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
-
-        if let Some(ws) = &*self.websocket.read().unwrap() {
-            let m = self.create_get_msg();
-            match ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
-            }
-        }
+        let m = self.create_get_msg();
+        self.ws_send(&m.to_string());
 
         subscription_id
     }
@@ -382,7 +376,7 @@ impl Node {
     }
 
     fn ws_send(&self, msg: &String) {
-        if let Some(ws) = &*self.websocket.read().unwrap() {
+        for ws in self.websockets.read().unwrap().values() {
             match ws.send_with_str(&msg) {
                 Ok(_) => console_log!("sent: {}", msg),
                 Err(err) => console_log!("error sending message: {:?}", err),
@@ -452,13 +446,8 @@ impl Node {
     pub fn put(&mut self, value: &JsValue) {
         let time = js_sys::Date::now();
         self.put_local(value, time);
-        if let Some(ws) = &*self.websocket.read().unwrap() {
-            let m = self.create_put_msg(&value, time);
-            match ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending message: {:?}", err),
-            }
-        }
+        let m = self.create_put_msg(&value, time);
+        self.ws_send(&m);
     }
 
     fn put_local(&mut self, value: &JsValue, time: f64) {
