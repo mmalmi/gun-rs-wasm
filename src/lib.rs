@@ -167,7 +167,7 @@ impl Node {
             console_log!("socket closed");
             let mut sockets = cloned_ws_pointer.write().unwrap();
             sockets.remove(&url_clone);
-            cloned_self.start_websocket(url_clone.clone()); // TODO call with timeout
+            let _ = cloned_self.start_websocket(url_clone.clone()); // TODO call with timeout
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
         onclose_callback.forget();
