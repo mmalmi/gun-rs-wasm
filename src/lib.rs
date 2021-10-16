@@ -149,19 +149,29 @@ impl Node {
         let cloned_ws = ws.clone();
 
         let cloned_ws_pointer = self.websockets.clone();
+        let url_clone = url.clone();
         let onopen_callback = Closure::wrap(Box::new(move |_| {
             console_log!("socket opened");
             let msg_id = random_string(8);
             let peer_id = random_string(8);
             let m = format!("{{\"#\":\"{}\",\"dam\":\"hi\",\"pid\":\"{}\"}}", msg_id, peer_id);
-            match cloned_ws.send_with_str(&m) {
-                Ok(_) => console_log!("sent: {}", m),
-                Err(err) => console_log!("error sending hi-message: {:?}", err),
-            }
+            let _ = cloned_ws.send_with_str(&m);
             cloned_ws_pointer.write().unwrap().insert(url.clone(), cloned_ws.clone());
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();
+
+        let cloned_self = self.clone();
+        let cloned_ws_pointer = self.websockets.clone();
+        let onclose_callback = Closure::wrap(Box::new(move |_| {
+            console_log!("socket closed");
+            let mut sockets = cloned_ws_pointer.write().unwrap();
+            sockets.remove(&url_clone);
+            cloned_self.start_websocket(url_clone.clone()); // TODO call with timeout
+        }) as Box<dyn FnMut(JsValue)>);
+        ws.set_onclose(Some(onclose_callback.as_ref().unchecked_ref()));
+        onclose_callback.forget();
+
         Ok(())
     }
 
