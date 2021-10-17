@@ -1,6 +1,6 @@
 import { Node as Gun } from "rusty-gun";
 
-const gun = new Gun({peers:['ws://localhost:8765/gun']});
+const gun = new Gun();
 
 setTimeout(() => { // wait for websocket to open
   gun.get('latestMsg').on((v,k) => console.log(k,v));

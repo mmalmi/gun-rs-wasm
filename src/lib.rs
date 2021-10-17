@@ -1,3 +1,4 @@
+mod utils;
 use wasm_bindgen::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{
@@ -8,10 +9,8 @@ use std::sync::{
 use wasm_bindgen::JsCast;
 use web_sys::{ErrorEvent, MessageEvent, WebSocket};
 use js_sys::{JSON, Reflect, Object as JsObject, Array as JsArray};
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
 use serde_json::{json, Value as SerdeJsonValue};
-
+use crate::utils::*;
 
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
@@ -42,18 +41,16 @@ type Subscriptions = Arc<RwLock<HashMap<usize, js_sys::Function>>>;
 type SharedNodeStore = Arc<RwLock<HashMap<usize, Node>>>;
 type SharedWebSockets = Arc<RwLock<HashMap<String, WebSocket>>>;
 
-// TODO use &str instead of String where possible
 // TODO proper automatic tests
 // TODO generic version for non-wasm usage
 // TODO break into submodules
-// TODO websocket
 // TODO persist data by saving root node to indexedDB as serialized by serde?
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct Node {
     id: usize,
-    updated_at: Arc<RwLock<f64>>, // TODO option?
+    updated_at: Arc<RwLock<f64>>, // TODO: Option<f64>?
     key: String,
     path: Vec<String>,
     value: Value,
@@ -65,18 +62,11 @@ pub struct Node {
     websockets: SharedWebSockets
 }
 
-fn random_string(len: usize) -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(len)
-        .map(char::from)
-        .collect()
-}
-
 #[wasm_bindgen]
 impl Node {
     #[wasm_bindgen(constructor)]
     pub fn new(options: &JsValue) -> Self {
+        set_panic_hook();
         let node = Self {
             id: 0,
             updated_at: Arc::new(RwLock::new(0.0)),
@@ -90,7 +80,6 @@ impl Node {
             store: SharedNodeStore::default(),
             websockets: SharedWebSockets::default()
         };
-        console_error_panic_hook::set_once();
         node.handle_options(options);
         node
     }
