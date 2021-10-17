@@ -201,8 +201,9 @@ impl Node {
         let subscription_id = get_id();
         self.on_subscriptions.write().unwrap().insert(subscription_id, callback);
         let m = self.create_get_msg();
-        self.ws_send(&m.to_string());
-
+        if self.websockets.read().unwrap().len() > 0 {
+            self.ws_send(&m.to_string());
+        }
         subscription_id
     }
 
@@ -445,8 +446,10 @@ impl Node {
     pub fn put(&mut self, value: &JsValue) {
         let time = js_sys::Date::now();
         self.put_local(value, time);
-        let m = self.create_put_msg(&value, time);
-        self.ws_send(&m);
+        if self.websockets.read().unwrap().len() > 0 {
+            let m = self.create_put_msg(&value, time);
+            self.ws_send(&m);
+        }
     }
 
     fn put_local(&mut self, value: &JsValue, time: f64) {
