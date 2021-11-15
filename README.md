@@ -3,6 +3,7 @@
   <h1><code>rusty-gun</code></h1>
 
   <strong>Rust & WASM port of <a href="https://github.com/amark/gun">Gun</a>.</strong>
+  <p>For a non-wasm version, check out <a href="https://github.com/mmalmi/gun-rs">gun-rs</a>
   
   <a href="https://rusty-gun-demo.netlify.app/">Example</a> (<a href="https://github.com/mmalmi/rusty-gun-demo/">source</a>)
 
