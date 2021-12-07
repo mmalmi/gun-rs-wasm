@@ -1,6 +1,6 @@
 <div align="center">
 
-  <h1><code>rusty-gun</code></h1>
+  <h1><code>gun-rs-wasm</code></h1>
 
   <strong>Rust & WASM port of <a href="https://github.com/amark/gun">Gun</a>.</strong>
   <p>For a non-wasm version, check out <a href="https://github.com/mmalmi/gun-rs">gun-rs</a>
