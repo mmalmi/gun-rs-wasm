@@ -22,8 +22,6 @@ gun.get("profile").get("name").put("Satoshi")
 
 You'll need to [load](https://developer.mozilla.org/en-US/docs/WebAssembly/Loading_and_running#using_fetch) rusty_gun_bg.wasm into the document first. It needs to be served using the mime type `application/wasm`.
 
-Non-wasm Rust port is also in the works.
-
 ## About
 
 [**📚 Read this template tutorial! 📚**][template-docs]
